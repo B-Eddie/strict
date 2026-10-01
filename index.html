@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#f7f2e7">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>Strict — the handwriting coach that refuses to read slop</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">STRICT<span class="brand-sub">handwriting court</span></div>
+  <div id="streak-pill" class="streak-pill">…</div>
+</header>
+
+<main>
+  <!-- LOADING -->
+  <section id="screen-loading" class="screen active">
+    <div class="load-wrap">
+      <div class="load-title">Strict</div>
+      <div class="load-sub">summoning the judge…</div>
+      <div id="load-progress" class="load-progress" style="display:none">
+        <div class="load-bar-track"><div id="load-bar" class="load-bar"></div></div>
+        <div id="load-pct" class="load-pct"></div>
+      </div>
+      <div id="load-status" class="load-status">Starting…</div>
+    </div>
+  </section>
+
+  <!-- PRACTICE -->
+  <section id="screen-practice" class="screen">
+    <div class="prompt-card">
+      <div class="prompt-label">COPY THIS <span id="prompt-tier" class="prompt-tier"></span></div>
+      <div id="prompt-text" class="prompt-text"></div>
+    </div>
+    <div class="tier-row">
+      <button class="tier-btn" data-tier="lenient">Lenient</button>
+      <button class="tier-btn sel" data-tier="teacher">Teacher</button>
+      <button class="tier-btn" data-tier="merciless">Merciless</button>
+    </div>
+    <div class="pad-wrap">
+      <canvas id="pad"></canvas>
+      <div id="judge-overlay" class="judge-overlay"><div id="judge-status">The judge is squinting…</div></div>
+    </div>
+    <div class="actions">
+      <button id="btn-undo" class="btn ghost">Undo</button>
+      <button id="btn-clear" class="btn ghost">Clear</button>
+      <button id="btn-newprompt" class="btn ghost">New prompt</button>
+      <button id="btn-judge" class="btn primary">Judge me</button>
+    </div>
+    <div class="foot-row">
+      <button id="btn-history" class="link">history</button>
+      <span class="en-note">English only · v1</span>
+    </div>
+  </section>
+
+  <!-- RESULT -->
+  <section id="screen-result" class="screen">
+    <div class="result-head">
+      <div id="score-num" class="score-num">0</div>
+      <div class="result-verdict">
+        <div id="verdict-stamp" class="stamp">FAIL</div>
+        <div id="verdict-tier" class="verdict-tier"></div>
+      </div>
+    </div>
+    <div id="roast-line" class="roast"></div>
+    <div class="diff-label">WHAT THE JUDGE READ</div>
+    <div id="word-diff" class="word-diff"></div>
+    <div id="callout-line" class="callout"></div>
+    <div class="actions">
+      <button id="btn-retry" class="btn ghost">Retry</button>
+      <button id="btn-newprompt2" class="btn ghost">New prompt</button>
+      <button id="btn-card" class="btn ghost">Report card</button>
+      <button id="btn-history2" class="link">history</button>
+    </div>
+  </section>
+
+  <!-- HISTORY -->
+  <section id="screen-history" class="screen">
+    <div class="hist-stats">
+      <div class="hist-stat"><div id="hist-streak" class="hist-num">0</div><div class="hist-cap">day streak</div></div>
+      <div class="hist-stat"><div id="hist-best" class="hist-num">0</div><div class="hist-cap">best score</div></div>
+      <div class="hist-stat"><div id="hist-count" class="hist-num">0</div><div class="hist-cap">pages judged</div></div>
+    </div>
+    <div id="hist-list" class="hist-list"></div>
+    <div class="actions"><button id="btn-back" class="btn primary">Back to practice</button></div>
+  </section>
+</main>
+
+<script src="/vendor/strict-vendor.js"></script>
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>

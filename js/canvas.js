@@ -1,0 +1,143 @@
+// Stroke capture + rendering. Pointer Events + getCoalescedEvents() + pressure.
+export class InkCanvas {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext("2d");
+    this.strokes = [];
+    this.current = null;
+    this.onChange = null;
+    this._resize();
+    this._bind();
+    window.addEventListener("resize", () => this._resize(true));
+  }
+
+  _resize(keep = false) {
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    const rect = this.canvas.getBoundingClientRect();
+    const w = Math.max(1, Math.round(rect.width * dpr));
+    const h = Math.max(1, Math.round(rect.height * dpr));
+    if (this.canvas.width === w && this.canvas.height === h) return;
+    this.canvas.width = w;
+    this.canvas.height = h;
+    this.dpr = dpr;
+    if (keep) this.redraw();
+    else this._paintPaper();
+  }
+
+  _paintPaper() {
+    const { ctx, canvas } = this;
+    ctx.fillStyle = "#fdfcf8";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+
+  // Re-measure against the laid-out element. Call whenever the canvas may
+  // have been hidden (display:none) at construction or screen switches.
+  refresh() { this._resize(true); }
+
+  _bind() {
+    const c = this.canvas;
+    c.style.touchAction = "none";
+    c.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      c.setPointerCapture(e.pointerId);
+      this.current = { points: [] };
+      this._addPoint(e);
+    });
+    c.addEventListener("pointermove", (e) => {
+      if (!this.current) return;
+      e.preventDefault();
+      const evts = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+      for (const ev of evts) this._addPoint(ev);
+      this._drawLatest();
+    });
+    const end = (e) => {
+      if (!this.current) return;
+      this._addPoint(e);
+      if (this.current.points.length > 1) this.strokes.push(this.current);
+      this.current = null;
+      this.redraw();
+      if (this.onChange) this.onChange();
+    };
+    c.addEventListener("pointerup", end);
+    c.addEventListener("pointercancel", () => { this.current = null; this.redraw(); });
+  }
+
+  _pos(e) {
+    const r = this.canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - r.left) * this.dpr,
+      y: (e.clientY - r.top) * this.dpr,
+      p: e.pressure && e.pressure > 0 ? e.pressure : 0.5,
+    };
+  }
+
+  _addPoint(e) {
+    const pt = this._pos(e);
+    const pts = this.current.points;
+    const last = pts[pts.length - 1];
+    if (last && Math.hypot(pt.x - last.x, pt.y - last.y) < 1.2 * this.dpr) return;
+    pts.push(pt);
+  }
+
+  _width(p) {
+    // pressure 0..1 -> 1.2px .. 3.4px at dpr=1 scale
+    return (1.1 + 2.6 * Math.min(1, Math.max(0, p))) * this.dpr;
+  }
+
+  _drawLatest() {
+    const pts = this.current.points;
+    const n = pts.length;
+    if (n < 2) return;
+    const { ctx } = this;
+    ctx.strokeStyle = "#1b2340";
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    // draw only the newest segment, smoothed against the previous point
+    const a = pts[n - 3] || pts[n - 2];
+    const b = pts[n - 2];
+    const c = pts[n - 1];
+    ctx.lineWidth = this._width((b.p + c.p) / 2);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.quadraticCurveTo(b.x, b.y, (b.x + c.x) / 2, (b.y + c.y) / 2);
+    ctx.stroke();
+  }
+
+  redraw() {
+    this._paintPaper();
+    const { ctx } = this;
+    ctx.strokeStyle = "#1b2340";
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (const s of this.strokes) {
+      const pts = s.points;
+      if (pts.length < 2) continue;
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length - 1; i++) {
+        ctx.lineWidth = this._width((pts[i].p + pts[i + 1].p) / 2);
+        const mx = (pts[i].x + pts[i + 1].x) / 2;
+        const my = (pts[i].y + pts[i + 1].y) / 2;
+        ctx.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(mx, my);
+      }
+    }
+  }
+
+  undo() { this.strokes.pop(); this.redraw(); if (this.onChange) this.onChange(); }
+  clear() { this.strokes = []; this.current = null; this.redraw(); if (this.onChange) this.onChange(); }
+  isEmpty() { return this.strokes.length === 0; }
+
+  inkBBox() {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const s of this.strokes)
+      for (const p of s.points) {
+        if (p.x < x0) x0 = p.x; if (p.y < y0) y0 = p.y;
+        if (p.x > x1) x1 = p.x; if (p.y > y1) y1 = p.y;
+      }
+    if (x0 === Infinity) return null;
+    return { x0, y0, x1, y1 };
+  }
+}
