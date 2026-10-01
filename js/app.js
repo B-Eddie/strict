@@ -11,7 +11,15 @@ import { renderReportCard, shareReportCard } from "./report.js";
 const MODEL_CACHE = "strict-models-v1";
 const DET_URL = "./models/PP-OCRv5_mobile_det.tar";
 const REC_URL = "./models/PP-OCRv5_mobile_rec.tar";
-const WASM_PATHS = "./vendor/wasm/";
+// onnxruntime resolves a wasmPaths STRING against its own bundle URL
+// (/strict/vendor/…), not the page — so a bare "./vendor/wasm/" doubles
+// to /strict/vendor/vendor/wasm/ and 404s the .mjs import ("no available
+// backend found"). Pass absolute URLs built from the page base instead.
+const WASM_DIR = new URL("./vendor/wasm/", document.baseURI).href;
+const WASM_PATHS = {
+  mjs: WASM_DIR + "ort-wasm-simd-threaded.jsep.mjs",
+  wasm: WASM_DIR + "ort-wasm-simd-threaded.wasm",
+};
 
 const $ = (id) => document.getElementById(id);
 const screens = ["loading", "practice", "result", "history"];
