@@ -98,7 +98,24 @@ async function boot() {
       try { await navigator.storage.persist(); } catch {}
     }
     if ("serviceWorker" in navigator) {
-      try { await navigator.serviceWorker.register("./sw.js"); } catch (e) { console.warn("sw failed", e); }
+      try {
+        const reg = await navigator.serviceWorker.register("./sw.js");
+        // Check for updates on every boot, not just the first: the page
+        // usually loads already-isolated, so the COI gate below would
+        // otherwise never trigger an update check and users could sit on
+        // a stale worker indefinitely.
+        try { await reg.update(); } catch {}
+        // If a new worker takes control mid-session, reload once so the
+        // fresh app shell actually runs (guarded against loops). Skipped
+        // on first install, where the claim needs no reload.
+        const hadController = !!navigator.serviceWorker.controller;
+        navigator.serviceWorker.addEventListener("controllerchange", () => {
+          if (hadController && !sessionStorage.getItem("strict-sw-reloaded")) {
+            sessionStorage.setItem("strict-sw-reloaded", "1");
+            location.reload();
+          }
+        });
+      } catch (e) { console.warn("sw failed", e); }
     }
     // The threaded WASM runtime needs a cross-origin-isolated page; the
     // service worker supplies the COOP/COEP headers GitHub Pages can't.
