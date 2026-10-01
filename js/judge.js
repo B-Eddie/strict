@@ -140,5 +140,7 @@ function stripToBlob(strokes, srcCanvas) {
     d[i * 4 + 3] = 255;
   }
   ctx.putImageData(img, 0, 0);
-  return new Promise((res) => c.toBlob(res, "image/png"));
+  return new Promise((res, rej) =>
+    c.toBlob((b) => b ? res(b) : rej(new Error("could not rasterize ink")), "image/png")
+  );
 }

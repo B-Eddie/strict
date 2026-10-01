@@ -5,7 +5,7 @@ import {
   preprocessStrokes, legibilityScore, alignWords, charDiff, normalize,
 } from "./judge.js";
 import { roast, verdict, TIER_LABEL, TIER_SUB } from "./roast.js";
-import { loadHistory, saveResult, streak, bestScore } from "./history.js";
+import { loadHistory, saveResult, streak, bestScore, localDay } from "./history.js";
 import { renderReportCard, shareReportCard } from "./report.js";
 
 const MODEL_CACHE = "strict-models-v1";
@@ -31,12 +31,58 @@ const state = {
   seed: 0,
 };
 
-function pickPrompt(tierWanted) {
-  const pool = PROMPTS.filter((p) => !tierWanted || p.tier === tierWanted);
-  return pool[Math.floor(Math.random() * pool.length)];
+function pickPrompt() {
+  return PROMPTS[Math.floor(Math.random() * PROMPTS.length)];
 }
 
 // ---------- boot ----------
+function showBootRetry() {
+  const b = $("btn-boot-retry");
+  if (b) {
+    b.style.display = "";
+    b.onclick = () => {
+      // Fresh page = fresh ORT backend registry (it caches init failures)
+      // and a fresh service-worker isolation check.
+      sessionStorage.removeItem("strict-coi-bounce");
+      location.reload();
+    };
+  }
+}
+
+async function ensureCrossOriginIsolated() {
+  if (self.crossOriginIsolated) return true;
+  if (!("serviceWorker" in navigator)) return false;
+  const bounces = parseInt(sessionStorage.getItem("strict-coi-bounce") || "0", 10);
+  if (bounces >= 2) return false; // already reloaded; the browser won't isolate
+  setLoadStatus("One-time setup: giving the judge a quiet room…");
+  try {
+    const reg = await navigator.serviceWorker.register("./sw.js");
+    try { await reg.update(); } catch {}
+    // Wait for the newest worker to finish installing/activating (it
+    // skipWaits, but precaching ~60MB takes a moment on first visit).
+    const worker = reg.installing || reg.waiting || reg.active;
+    if (worker && worker.state !== "activated") {
+      await new Promise((resolve) => {
+        const to = setTimeout(resolve, 25000);
+        const onState = () => {
+          if (worker.state === "activated" || worker.state === "redundant") {
+            clearTimeout(to);
+            resolve();
+          }
+        };
+        worker.addEventListener("statechange", onState);
+        onState();
+      });
+    }
+    await navigator.serviceWorker.ready;
+  } catch (e) {
+    console.warn("service worker setup failed", e);
+  }
+  sessionStorage.setItem("strict-coi-bounce", String(bounces + 1));
+  location.reload();
+  await new Promise(() => {}); // page is unloading; never resolves
+}
+
 async function boot() {
   show("loading");
   try {
@@ -45,6 +91,16 @@ async function boot() {
     }
     if ("serviceWorker" in navigator) {
       try { await navigator.serviceWorker.register("./sw.js"); } catch (e) { console.warn("sw failed", e); }
+    }
+    // The threaded WASM runtime needs a cross-origin-isolated page; the
+    // service worker supplies the COOP/COEP headers GitHub Pages can't.
+    const isolated = await ensureCrossOriginIsolated();
+    if (!isolated) {
+      throw new Error(
+        "This browser wouldn't let the page isolate itself, so the judge's " +
+        "thinking engine can't start. Try Safari with content blockers off, " +
+        "or reinstall the app."
+      );
     }
     setLoadStatus("Checking the judge's library…");
     const need = await missingModels();
@@ -62,17 +118,26 @@ async function boot() {
   } catch (e) {
     setLoadStatus("The judge failed to wake up: " + (e.message || e));
     console.error(e);
+    showBootRetry();
   }
 }
 
 function setLoadStatus(t) { $("load-status").textContent = t; }
+
+// Cache keys as absolute URLs: the service worker matches on e.request.url,
+// so keys must resolve identically in both contexts.
+const absUrl = (u) => new URL(u, location.href).href;
 
 async function missingModels() {
   try {
     if (!(await caches.has(MODEL_CACHE))) return [DET_URL, REC_URL];
     const c = await caches.open(MODEL_CACHE);
     const out = [];
-    for (const u of [DET_URL, REC_URL]) if (!(await c.match(u))) out.push(u);
+    for (const u of [DET_URL, REC_URL]) {
+      const hit = await c.match(absUrl(u));
+      // Reject corrupt/partial entries (zero-byte or error responses).
+      if (!hit || !hit.ok) out.push(u);
+    }
     return out;
   } catch { return [DET_URL, REC_URL]; }
 }
@@ -102,7 +167,20 @@ async function downloadModels(urls) {
       pct.textContent = name + ": " + mb + " / " + tot + " MB";
       bar.style.width = Math.round(((done + (len ? got / len : 0.5)) / total) * 100) + "%";
     }
-    await cache.put(url, new Response(new Blob(chunks), { headers: res.headers }));
+    if (len && got !== len) throw new Error("download interrupted: " + name);
+    if (!got) throw new Error("download empty: " + name);
+    // Strip transport headers before caching: the stored bytes are already
+    // decoded, so a cached content-encoding/content-length would corrupt
+    // future reads with double-decoding or truncation.
+    const headers = new Headers();
+    res.headers.forEach((v, k) => {
+      if (k !== "content-encoding" && k !== "content-length") headers.set(k, v);
+    });
+    try {
+      await cache.put(absUrl(url), new Response(new Blob(chunks), { headers }));
+    } catch (e) {
+      throw new Error("couldn't save " + name + " (" + (e && e.message || e) + ")");
+    }
     done++;
   }
   $("load-progress").style.display = "none";
@@ -249,7 +327,8 @@ async function makeCard() {
     const h = loadHistory();
     const blob = await renderReportCard({
       score: r.score, tier: r.tier, promptText: r.prompt.text,
-      day: new Date().toISOString().slice(0, 10), streak: streak(h),
+      passed: r.passed,
+      day: localDay(), streak: streak(h),
     });
     await shareReportCard(blob, "strict-report-" + Date.now() + ".png");
   } catch (e) {
@@ -273,7 +352,7 @@ function renderHistory() {
     const p = PROMPTS.find((x) => x.id === r.promptId);
     const div = document.createElement("div");
     div.className = "hist-row";
-    div.innerHTML = `<span class="hist-score ${r.score >= 65 ? "pass" : "fail"}">${r.score}</span>
+    div.innerHTML = `<span class="hist-score ${verdict(r.tier, r.score) ? "pass" : "fail"}">${r.score}</span>
       <span class="hist-meta">${esc(r.day)} · ${TIER_LABEL[r.tier]}<br><span class="hist-prompt">${esc(p ? p.text : r.promptId)}</span></span>`;
     list.appendChild(div);
   }

@@ -1,7 +1,7 @@
 // Illegibility Report Card: 1080x1350 canvas PNG + navigator.share fallback.
 import { TIER_LABEL } from "./roast.js";
 
-export async function renderReportCard({ score, tier, promptText, day, streak }) {
+export async function renderReportCard({ score, tier, promptText, day, streak, passed }) {
   const W = 1080, H = 1350;
   const c = document.createElement("canvas");
   c.width = W; c.height = H;
@@ -18,7 +18,7 @@ export async function renderReportCard({ score, tier, promptText, day, streak })
   x.fillText("judged by Strict", W / 2, 180);
 
   // big score
-  x.fillStyle = score >= 65 ? "#1b7a3d" : "#b3372a";
+  x.fillStyle = passed ? "#1b7a3d" : "#b3372a";
   x.font = "700 300px Georgia, serif";
   x.fillText(String(score), W / 2, 520);
   x.fillStyle = "#8a8578"; x.font = "30px Georgia, serif";
@@ -43,9 +43,11 @@ export async function renderReportCard({ score, tier, promptText, day, streak })
   x.fillStyle = "#8a8578"; x.font = "30px system-ui, sans-serif"; x.textAlign = "center";
   x.fillText(day + "  ·  " + streak + "-day streak", W / 2, 1150);
   x.font = "700 34px system-ui, sans-serif"; x.fillStyle = "#1b2340";
-  x.fillText(score >= 65 ? "CERTIFIED READABLE" : "NEEDS WORK", W / 2, 1220);
+  x.fillText(passed ? "CERTIFIED READABLE" : "NEEDS WORK", W / 2, 1220);
 
-  return new Promise((res) => c.toBlob(res, "image/png"));
+  return new Promise((res, rej) =>
+    c.toBlob((b) => b ? res(b) : rej(new Error("card render failed")), "image/png")
+  );
 }
 
 function wrap(x, text, cx, y, maxW, lh) {

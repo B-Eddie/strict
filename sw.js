@@ -1,9 +1,18 @@
-// Strict service worker.
+// Strict service worker v3.
 // SHELL: app code, precached on install (version-pinned).
-// MODELS: PaddleOCR.js model tars, version-pinned cache populated by the app's
-// first-run download UI (real progress) and served cache-first afterwards.
-const SHELL_CACHE = "strict-shell-v2";
-const MODEL_CACHE = "strict-models-v2";
+// MODELS: PaddleOCR.js model tars, cache-first (populated by the app's
+// first-run download UI with real progress).
+// COI: adds Cross-Origin-Opener-Policy / Cross-Origin-Embedder-Policy to
+// same-origin responses. GitHub Pages cannot send these headers, but the
+// threaded WASM runtime (onnxruntime-web) requires a cross-origin-isolated
+// page to allocate shared WebAssembly memory — without them OCR init fails
+// on iOS Safari with "no available backend found". Rewrapping a cached or
+// network response with the headers at serve time applies them to document
+// loads as well, so the page becomes crossOriginIsolated.
+const SHELL_CACHE = "strict-shell-v3";
+// NOTE: model cache name must match MODEL_CACHE in js/app.js, or the
+// service worker's activate cleanup will delete the app-managed models.
+const MODEL_CACHE = "strict-models-v1";
 
 // Base path of the app ("/" locally, "/strict/" on GitHub Pages).
 const BASE = new URL("./", self.location).pathname;
@@ -31,6 +40,18 @@ const SHELL = [
   "./icons/icon-512.png",
 ];
 
+function withCoiHeaders(res) {
+  if (!res) return res;
+  const headers = new Headers(res.headers);
+  headers.set("Cross-Origin-Opener-Policy", "same-origin");
+  headers.set("Cross-Origin-Embedder-Policy", "require-corp");
+  return new Response(res.body, {
+    status: res.status,
+    statusText: res.statusText,
+    headers,
+  });
+}
+
 self.addEventListener("install", (e) => {
   e.waitUntil(
     caches.open(SHELL_CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())
@@ -52,13 +73,14 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (url.origin !== self.location.origin || e.request.method !== "GET") return;
+  if (e.request.headers.has("range")) return; // never rewrite range requests
 
   // Models: cache-first (populated by first-run UI). If evicted/missing and
   // offline, this fails and the app falls back to the download UI.
   if (url.pathname.startsWith(MODELS_PREFIX)) {
     e.respondWith(
       caches.open(MODEL_CACHE).then((c) =>
-        c.match(e.request).then((hit) => hit || fetch(e.request))
+        c.match(e.request).then((hit) => withCoiHeaders(hit) || fetch(e.request).then(withCoiHeaders))
       )
     );
     return;
@@ -66,6 +88,6 @@ self.addEventListener("fetch", (e) => {
 
   // Shell: cache-first, network fallback.
   e.respondWith(
-    caches.match(e.request).then((hit) => hit || fetch(e.request))
+    caches.match(e.request).then((hit) => withCoiHeaders(hit) || fetch(e.request).then(withCoiHeaders))
   );
 });

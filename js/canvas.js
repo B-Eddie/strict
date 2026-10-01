@@ -5,6 +5,7 @@ export class InkCanvas {
     this.ctx = canvas.getContext("2d");
     this.strokes = [];
     this.current = null;
+    this.activeId = null; // the one pointer currently drawing (pencil/finger)
     this.onChange = null;
     this._resize();
     this._bind();
@@ -38,28 +39,36 @@ export class InkCanvas {
     const c = this.canvas;
     c.style.touchAction = "none";
     c.addEventListener("pointerdown", (e) => {
+      // One active pointer at a time: a second finger (palm) must not
+      // clobber the stroke in progress.
+      if (this.activeId !== null) return;
       e.preventDefault();
-      c.setPointerCapture(e.pointerId);
+      try { c.setPointerCapture(e.pointerId); } catch {}
+      this.activeId = e.pointerId;
       this.current = { points: [] };
       this._addPoint(e);
     });
     c.addEventListener("pointermove", (e) => {
-      if (!this.current) return;
+      if (!this.current || e.pointerId !== this.activeId) return;
       e.preventDefault();
       const evts = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
       for (const ev of evts) this._addPoint(ev);
       this._drawLatest();
     });
+    // Commit on both up and cancel: a cancelled stroke (e.g. an incoming
+    // call) still happened on the page, so it counts as ink — including
+    // single taps, which become dots (i, j, punctuation).
     const end = (e) => {
-      if (!this.current) return;
+      if (!this.current || e.pointerId !== this.activeId) return;
       this._addPoint(e);
-      if (this.current.points.length > 1) this.strokes.push(this.current);
+      if (this.current.points.length >= 1) this.strokes.push(this.current);
       this.current = null;
+      this.activeId = null;
       this.redraw();
       if (this.onChange) this.onChange();
     };
     c.addEventListener("pointerup", end);
-    c.addEventListener("pointercancel", () => { this.current = null; this.redraw(); });
+    c.addEventListener("pointercancel", end);
   }
 
   _pos(e) {
@@ -107,11 +116,26 @@ export class InkCanvas {
     this._paintPaper();
     const { ctx } = this;
     ctx.strokeStyle = "#1b2340";
+    ctx.fillStyle = "#1b2340";
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     for (const s of this.strokes) {
       const pts = s.points;
-      if (pts.length < 2) continue;
+      if (pts.length === 1) {
+        // tap: draw a dot so i/j punctuation stays visible
+        ctx.beginPath();
+        ctx.arc(pts[0].x, pts[0].y, this._width(pts[0].p) / 2, 0, Math.PI * 2);
+        ctx.fill();
+        continue;
+      }
+      if (pts.length === 2) {
+        ctx.beginPath();
+        ctx.lineWidth = this._width((pts[0].p + pts[1].p) / 2);
+        ctx.moveTo(pts[0].x, pts[0].y);
+        ctx.lineTo(pts[1].x, pts[1].y);
+        ctx.stroke();
+        continue;
+      }
       ctx.beginPath();
       ctx.moveTo(pts[0].x, pts[0].y);
       for (let i = 1; i < pts.length - 1; i++) {
@@ -123,11 +147,16 @@ export class InkCanvas {
         ctx.beginPath();
         ctx.moveTo(mx, my);
       }
+      // final segment to the last point (the loop stops at its midpoint)
+      const n = pts.length;
+      ctx.lineWidth = this._width((pts[n - 2].p + pts[n - 1].p) / 2);
+      ctx.lineTo(pts[n - 1].x, pts[n - 1].y);
+      ctx.stroke();
     }
   }
 
   undo() { this.strokes.pop(); this.redraw(); if (this.onChange) this.onChange(); }
-  clear() { this.strokes = []; this.current = null; this.redraw(); if (this.onChange) this.onChange(); }
+  clear() { this.strokes = []; this.current = null; this.activeId = null; this.redraw(); if (this.onChange) this.onChange(); }
   isEmpty() { return this.strokes.length === 0; }
 
   inkBBox() {
