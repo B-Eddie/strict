@@ -135,8 +135,10 @@ async function missingModels() {
     const out = [];
     for (const u of [DET_URL, REC_URL]) {
       const hit = await c.match(absUrl(u));
-      // Reject corrupt/partial entries (zero-byte or error responses).
-      if (!hit || !hit.ok) out.push(u);
+      // Reject corrupt/partial entries (zero-byte or error responses), and
+      // entries cached by older app versions that kept the content-encoding
+      // header on an already-decoded body (double-decode corruption).
+      if (!hit || !hit.ok || hit.headers.get("content-encoding")) out.push(u);
     }
     return out;
   } catch { return [DET_URL, REC_URL]; }
@@ -154,6 +156,12 @@ async function downloadModels(urls) {
     const res = await fetch(url);
     if (!res.ok || !res.body) throw new Error("download failed: " + url);
     const len = +(res.headers.get("content-length") || 0);
+    // content-length describes the ENCODED bytes, but fetch() hands us the
+    // DECODED stream — with gzip in transit the two never match, so the
+    // exact byte check only applies to identity (unencoded) responses.
+    // For encoded ones, clean stream completion is the integrity signal
+    // (fetch rejects the read loop on truncation).
+    const encoded = !/^(identity)?$/i.test(res.headers.get("content-encoding") || "identity");
     const reader = res.body.getReader();
     const chunks = [];
     let got = 0;
@@ -163,11 +171,14 @@ async function downloadModels(urls) {
       chunks.push(value);
       got += value.length;
       const mb = (got / 1048576).toFixed(1);
-      const tot = len ? (len / 1048576).toFixed(1) + " MB" : "…";
+      // When encoded, len is the compressed size — incomparable with the
+      // decoded bytes received, so don't show it as the total.
+      const tot = len && !encoded ? (len / 1048576).toFixed(1) : "…";
       pct.textContent = name + ": " + mb + " / " + tot + " MB";
-      bar.style.width = Math.round(((done + (len ? got / len : 0.5)) / total) * 100) + "%";
+      const frac = len && !encoded ? got / len : 0.5;
+      bar.style.width = Math.min(100, Math.round(((done + frac) / total) * 100)) + "%";
     }
-    if (len && got !== len) throw new Error("download interrupted: " + name);
+    if (!encoded && len && got !== len) throw new Error("download interrupted: " + name);
     if (!got) throw new Error("download empty: " + name);
     // Strip transport headers before caching: the stored bytes are already
     // decoded, so a cached content-encoding/content-length would corrupt

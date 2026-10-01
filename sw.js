@@ -45,6 +45,10 @@ function withCoiHeaders(res) {
   const headers = new Headers(res.headers);
   headers.set("Cross-Origin-Opener-Policy", "same-origin");
   headers.set("Cross-Origin-Embedder-Policy", "require-corp");
+  // res.body is already content-decoded by fetch(); a stale
+  // content-encoding/content-length would corrupt downstream reads.
+  headers.delete("content-encoding");
+  headers.delete("content-length");
   return new Response(res.body, {
     status: res.status,
     statusText: res.statusText,
