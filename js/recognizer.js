@@ -55,8 +55,12 @@ export function recognizerDiagnostics() {
     deviceMemoryGB: navigator.deviceMemory || null,
     // Pinned build: onnxruntime-web 1.30.0, threaded jsep wasm, proxy worker
     // disabled (init runs on the already-isolated main thread — iOS Safari
-    // does not propagate COI into blob-URL workers).
-    ortBuild: "ort-wasm-simd-threaded.jsep@1.30.0+proxy=false",
+    // does not propagate COI into blob-URL workers). The vendored jsep.mjs
+    // is patched to cap the shared WASM memory at 1 GiB (maximum:16384
+    // pages): Apple mobile WebKit caps each shared WebAssembly.Memory at
+    // 1 GiB, and the stock 4 GiB maximum throws RangeError: Out of memory
+    // at initWasm on iOS even when the page is cross-origin isolated.
+    ortBuild: "ort-wasm-simd-threaded.jsep@1.30.0+proxy=false+memmax1g",
     firstError: firstInitError ? errorText(firstInitError, 0) : null,
     firstStack: firstInitError && firstInitError.stack ? String(firstInitError.stack).slice(0, 2000) : null,
   };

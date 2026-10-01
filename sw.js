@@ -9,7 +9,7 @@
 // on iOS Safari with "no available backend found". Rewrapping a cached or
 // network response with the headers at serve time applies them to document
 // loads as well, so the page becomes crossOriginIsolated.
-const SHELL_CACHE = "strict-shell-v6";
+const SHELL_CACHE = "strict-shell-v7";
 // NOTE: model cache name must match MODEL_CACHE in js/app.js, or the
 // service worker's activate cleanup will delete the app-managed models.
 const MODEL_CACHE = "strict-models-v1";
