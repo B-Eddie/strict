@@ -20,6 +20,15 @@ const PASS = {
   teacher: ["Clean. No excuses needed this time."],
   merciless: ["Flawless. Frame this page."],
 };
+// Near-miss praise: cleared the cutoff but only just (within 15 points).
+// A "flawless" for an 88 under Merciless reads as the judge not paying
+// attention, so near-misses get a raised eyebrow instead of a medal.
+const BARELY = {
+  lenient: ["Passed, but only because the bar was on the floor."],
+  teacher: ["A pass. Barely. The red pen stays uncapped."],
+  merciless: ["A pass, not calligraphy. The bar stays where it was."],
+};
+const NEAR_MISS_MARGIN = 15;
 const FIXES = [
   "Slow down and finish each letter before starting the next.",
   "Keep your letters on the baseline — floaters get misread.",
@@ -29,16 +38,26 @@ const FIXES = [
   "Your e's are collapsing — give them a backbone.",
 ];
 
-export function roast(tier, passed, seed = 0) {
-  const pool = passed ? PASS[tier] : FAIL[tier];
+export function roast(tier, passed, seed = 0, score = null) {
+  let pool;
+  if (!passed) {
+    pool = FAIL[tier];
+  } else if (score !== null && score - cutoffsFor(tier) < NEAR_MISS_MARGIN) {
+    pool = BARELY[tier];
+  } else {
+    pool = PASS[tier];
+  }
   const line = pool[seed % pool.length];
   const fix = passed ? "" : " " + FIXES[seed % FIXES.length];
   return line + fix;
 }
 
+export function cutoffsFor(tier) {
+  return { lenient: 40, teacher: 65, merciless: 85 }[tier];
+}
+
 export function verdict(tier, score) {
-  const cutoffs = { lenient: 40, teacher: 65, merciless: 85 };
-  return score >= cutoffs[tier];
+  return score >= cutoffsFor(tier);
 }
 
 export const TIER_LABEL = { lenient: "Lenient", teacher: "Teacher", merciless: "Merciless" };

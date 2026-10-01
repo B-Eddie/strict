@@ -92,7 +92,20 @@
   </section>
 </main>
 
-<script src="./vendor/strict-vendor.js"></script>
+<script defer src="./vendor/strict-vendor.js"></script>
+<script>
+  // Watchdog: if the module graph fails to load/parse (e.g. a bad deploy),
+  // nothing runs and the page would sit on "Starting…" forever. Surface
+  // the retry button after 20s. js/app.js sets __strict_booted the moment
+  // it evaluates, so this only fires when the module never got that far.
+  setTimeout(function () {
+    if (window.__strict_booted) return;
+    var s = document.getElementById("load-status");
+    if (s) s.textContent = "The app's code failed to load. Check your connection and try again.";
+    var b = document.getElementById("btn-boot-retry");
+    if (b) { b.style.display = ""; b.onclick = function () { location.reload(); }; }
+  }, 20000);
+</script>
 <script type="module" src="./js/app.js"></script>
 </body>
 </html>

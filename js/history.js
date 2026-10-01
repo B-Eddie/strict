@@ -9,11 +9,20 @@ export function localDay(d = new Date()) {
   return d.getFullYear() + "-" + m + "-" + dd;
 }
 
+function validEntry(r) {
+  return r && typeof r === "object" &&
+    typeof r.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(r.day) &&
+    typeof r.score === "number" && Number.isFinite(r.score) &&
+    (r.tier === undefined || ["lenient", "teacher", "merciless"].includes(r.tier));
+}
+
 export function loadHistory() {
   try {
     const raw = localStorage.getItem(KEY);
     const arr = raw ? JSON.parse(raw) : [];
-    return Array.isArray(arr) ? arr : [];
+    // Guard against half-written / hand-edited / downgraded entries:
+    // one malformed row must not break the history screen or streak math.
+    return Array.isArray(arr) ? arr.filter(validEntry) : [];
   } catch { return []; }
 }
 

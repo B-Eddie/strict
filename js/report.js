@@ -64,13 +64,23 @@ function wrap(x, text, cx, y, maxW, lh) {
 export async function shareReportCard(blob, filename) {
   const file = new File([blob], filename || "strict-report.png", { type: "image/png" });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    await navigator.share({ files: [file], title: "My Strict report card" });
+    try {
+      await navigator.share({ files: [file], title: "My Strict report card" });
+    } catch (e) {
+      // Dismissing the share sheet is not an error — stay silent instead
+      // of punishing the user with an alert.
+      if (e && e.name !== "AbortError") throw e;
+      return "cancelled";
+    }
     return "shared";
   }
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = filename || "strict-report.png";
+  document.body.appendChild(a);
   a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  a.remove();
+  // Revoke late: a slow save dialog can still be reading the URL at 5s.
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
   return "downloaded";
 }

@@ -1,14 +1,30 @@
 import { PROMPTS, TIER_NAMES } from "./prompts.js";
 import { InkCanvas } from "./canvas.js";
-import { createPaddleRecognizer } from "./recognizer.js";
+import { createPaddleRecognizer, recognizerDiagnostics } from "./recognizer.js";
 import {
   preprocessStrokes, legibilityScore, alignWords, charDiff, normalize,
 } from "./judge.js";
-import { roast, verdict, TIER_LABEL, TIER_SUB } from "./roast.js";
+import { roast, verdict, TIER_LABEL, TIER_SUB, cutoffsFor } from "./roast.js";
 import { loadHistory, saveResult, streak, bestScore, localDay } from "./history.js";
 import { renderReportCard, shareReportCard } from "./report.js";
 
+// Set the moment this module evaluates: the inline watchdog in index.html
+// uses it to tell "module graph failed to load" apart from a slow boot.
+window.__strict_booted = true;
+
+// Reject if p doesn't settle in ms — boot must never hang silently on a
+// stalled network (hotel wifi, captive portal) with no way to retry.
+function withTimeout(p, ms, what) {
+  let t;
+  const gate = new Promise((_, rej) => {
+    t = setTimeout(() => rej(new Error(what + " timed out after " + Math.round(ms / 1000) + "s")), ms);
+  });
+  return Promise.race([p, gate]).finally(() => clearTimeout(t));
+}
+
 const MODEL_CACHE = "strict-models-v1";
+// ^ KEEP IN SYNC with MODEL_CACHE in sw.js (activate() deletes any cache
+// not matching either file's name — bump both together when models change).
 const DET_URL = "./models/PP-OCRv5_mobile_det.tar";
 const REC_URL = "./models/PP-OCRv5_mobile_rec.tar";
 // onnxruntime resolves a wasmPaths STRING against its own bundle URL
@@ -16,10 +32,20 @@ const REC_URL = "./models/PP-OCRv5_mobile_rec.tar";
 // to /strict/vendor/vendor/wasm/ and 404s the .mjs import ("no available
 // backend found"). Pass absolute URLs built from the page base instead.
 const WASM_DIR = new URL("./vendor/wasm/", document.baseURI).href;
+// Pair the jsep glue with the jsep binary it was built for. (An earlier
+// revision pointed `wasm` at the non-jsep binary, which the Emscripten
+// factory then had to swallow via locateFile — fragile and pointless.)
 const WASM_PATHS = {
   mjs: WASM_DIR + "ort-wasm-simd-threaded.jsep.mjs",
-  wasm: WASM_DIR + "ort-wasm-simd-threaded.wasm",
+  wasm: WASM_DIR + "ort-wasm-simd-threaded.jsep.wasm",
 };
+// iOS Safari does not propagate the page's cross-origin isolation into
+// blob-URL workers, so onnxruntime's default wasm *proxy* worker (which runs
+// initWasm off the main thread) can never see a SharedArrayBuffer there —
+// initWasm fails on iPhone even though the page itself is isolated. Run the
+// wasm backend on the main thread instead; the page is already isolated by
+// the service worker's COOP/COEP headers by the time we get here.
+const ORT_OPTIONS = { proxy: false };
 
 const $ = (id) => document.getElementById(id);
 const screens = ["loading", "practice", "result", "history"];
@@ -29,6 +55,12 @@ function show(name) {
   window.scrollTo(0, 0);
   // the pad canvas is display:none until this screen shows; re-fit it now
   if (name === "practice" && ink) ink.refresh();
+  // keep "Judge me" honest whenever we land back on practice (retry/back
+  // may have cleared the ink without touching the button)
+  if (name === "practice" && ink && !judging) {
+    const b = $("btn-judge");
+    if (b) b.disabled = ink.isEmpty();
+  }
 }
 
 const state = {
@@ -135,13 +167,33 @@ async function boot() {
       setLoadStatus("Judge is ready.");
     }
     setLoadStatus("Warming up the judge…");
-    state.recognizer = await createPaddleRecognizer({ detUrl: DET_URL, recUrl: REC_URL, wasmPaths: WASM_PATHS });
-    await state.recognizer.load();
+    state.recognizer = await createPaddleRecognizer({ detUrl: DET_URL, recUrl: REC_URL, wasmPaths: WASM_PATHS, ortOptions: ORT_OPTIONS });
+    await withTimeout(state.recognizer.load(), 180000, "warming up the judge");
     newPrompt();
     show("practice");
+    // Successful boot: clear one-shot guards so a later service-worker
+    // update in this tab session can reload again (and the COI bounce
+    // counter doesn't leak into future sessions).
+    try {
+      sessionStorage.removeItem("strict-sw-reloaded");
+      sessionStorage.removeItem("strict-coi-bounce");
+    } catch {}
     refreshStreakPill();
   } catch (e) {
-    setLoadStatus("The judge failed to wake up: " + (e.message || e));
+    // On a real device the raw ORT error is usually the follow-on
+    // "previous call to 'initWasm()' failed" — attach the diagnostics so the
+    // boot screen names the environment and the first captured error.
+    let detail = e.message || String(e);
+    try {
+      const d = recognizerDiagnostics();
+      console.error("[strict] boot diagnostics:", d);
+      const first = d.firstError ? String(d.firstError).split("\n")[0].slice(0, 220) : "none";
+      detail += ` [iOS=${d.iOS ? 1 : 0} coi=${d.crossOriginIsolated ? 1 : 0}` +
+        ` sab=${d.sharedArrayBuffer ? 1 : 0} threads=${d.wasmThreads ? 1 : 0}` +
+        ` cores=${d.cores || "?"} mem=${d.deviceMemoryGB || "?"}GB` +
+        ` build=${d.ortBuild} firstErr=${first}]`;
+    } catch (diagErr) { console.warn("[strict] diagnostics failed", diagErr); }
+    setLoadStatus("The judge failed to wake up: " + detail);
     console.error(e);
     showBootRetry();
   }
@@ -178,7 +230,19 @@ async function downloadModels(urls) {
   for (const url of urls) {
     const name = url.split("/").pop();
     setLoadStatus("Downloading " + name + "…");
-    const res = await fetch(url);
+    // Total cap per file plus a stall watchdog: fetch() has no built-in
+    // timeout, and a wedged connection would otherwise sit on the loading
+    // screen forever with the catch/retry below never running.
+    const ctrl = new AbortController();
+    const totalTimer = setTimeout(() => ctrl.abort(), 180000);
+    let res;
+    try {
+      res = await fetch(url, { signal: ctrl.signal });
+    } catch (e) {
+      throw new Error("download failed: " + name + " (" + (e && e.name === "AbortError" ? "timed out" : (e && e.message || e)) + ")");
+    } finally {
+      clearTimeout(totalTimer);
+    }
     if (!res.ok || !res.body) throw new Error("download failed: " + url);
     const len = +(res.headers.get("content-length") || 0);
     // content-length describes the ENCODED bytes, but fetch() hands us the
@@ -190,11 +254,17 @@ async function downloadModels(urls) {
     const reader = res.body.getReader();
     const chunks = [];
     let got = 0;
+    let lastProgress = Date.now();
     for (;;) {
+      if (Date.now() - lastProgress > 45000) {
+        try { reader.cancel(); } catch {}
+        throw new Error("download stalled: " + name);
+      }
       const { done: d, value } = await reader.read();
       if (d) break;
       chunks.push(value);
       got += value.length;
+      lastProgress = Date.now();
       const mb = (got / 1048576).toFixed(1);
       // When encoded, len is the compressed size — incomparable with the
       // decoded bytes received, so don't show it as the total.
@@ -261,15 +331,24 @@ function renderPrompt() {
   $("prompt-tier").textContent = TIER_NAMES[p.tier];
 }
 
-function refreshStreakPill() {
-  const h = loadHistory();
+function refreshStreakPill(h) {
+  h = h || loadHistory();
   const s = streak(h);
   $("streak-pill").textContent = s > 0 ? "\u{1F525} " + s + "-day streak" : "no streak yet";
 }
 
 // ---------- judging ----------
+let judging = false; // re-entrancy guard: "Judge me" is double-tappable
+const ACTION_BTNS = ["btn-undo", "btn-clear", "btn-newprompt", "btn-judge"];
+function setActionsEnabled(on) {
+  for (const id of ACTION_BTNS) { const b = $(id); if (b) b.disabled = !on; }
+  document.querySelectorAll(".tier-btn").forEach((b) => { b.disabled = !on; });
+  if (on) $("btn-judge").disabled = ink.isEmpty();
+}
 async function judge() {
-  if (ink.isEmpty()) return;
+  if (judging || ink.isEmpty()) return;
+  judging = true;
+  setActionsEnabled(false);
   $("judge-overlay").classList.add("show");
   $("judge-status").textContent = "The judge is squinting…";
   try {
@@ -277,18 +356,28 @@ async function judge() {
     if (!strips.length) throw new Error("no ink found");
     let recognized = "";
     const confs = [];
+    let failedStrips = 0;
     for (const blob of strips) {
-      const items = await state.recognizer.recognize(blob);
-      recognized += (recognized ? " " : "") + items.map((i) => i.text).join(" ");
-      for (const it of items) confs.push(it.score || 0);
+      // One bad strip must not nuke the whole page: skip it and score
+      // the rest. (A strip that fails every time still surfaces below
+      // via low confidence / missing words.)
+      try {
+        const items = await state.recognizer.recognize(blob);
+        recognized += (recognized ? " " : "") + items.map((i) => i.text).join(" ");
+        for (const it of items) confs.push(it.score || 0);
+      } catch (stripErr) {
+        console.warn("[strict] strip skipped", stripErr);
+        failedStrips++;
+      }
     }
+    if (!recognized.trim() && failedStrips) throw new Error("the judge couldn't read any of the writing");
     const score = legibilityScore(state.prompt.text, recognized);
     const passed = verdict(state.tier, score);
     const pairs = alignWords(state.prompt.text, recognized);
     const meanConf = confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : 0;
     state.lastResult = { score, passed, recognized, pairs, meanConf, prompt: state.prompt, tier: state.tier, seed: state.seed };
-    saveResult({ score, tier: state.tier, promptId: state.prompt.id });
-    refreshStreakPill();
+    const h = saveResult({ score, tier: state.tier, promptId: state.prompt.id });
+    refreshStreakPill(h);
     renderResult(state.lastResult);
     show("result");
   } catch (e) {
@@ -297,6 +386,8 @@ async function judge() {
     await new Promise((r) => setTimeout(r, 1800));
   } finally {
     $("judge-overlay").classList.remove("show");
+    judging = false;
+    setActionsEnabled(true);
   }
 }
 
@@ -305,9 +396,8 @@ function renderResult(r) {
   $("score-num").className = "score-num " + (r.passed ? "pass" : "fail");
   $("verdict-stamp").textContent = r.passed ? "PASS" : "FAIL";
   $("verdict-stamp").className = "stamp " + (r.passed ? "pass" : "fail");
-  $("verdict-tier").textContent = TIER_LABEL[r.tier] + " · needed " +
-    ({ lenient: 40, teacher: 65, merciless: 85 })[r.tier];
-  $("roast-line").textContent = roast(r.tier, r.passed, r.seed);
+  $("verdict-tier").textContent = TIER_LABEL[r.tier] + " · needed " + cutoffsFor(r.tier);
+  $("roast-line").textContent = roast(r.tier, r.passed, r.seed, r.score);
 
   const wrap = $("word-diff");
   wrap.innerHTML = "";

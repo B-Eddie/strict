@@ -6,10 +6,27 @@ export class InkCanvas {
     this.strokes = [];
     this.current = null;
     this.activeId = null; // the one pointer currently drawing (pencil/finger)
+    this.activeType = null; // its pointerType ("pen" outranks "touch")
     this.onChange = null;
     this._resize();
     this._bind();
-    window.addEventListener("resize", () => this._resize(true));
+    // iOS Safari fires resize when the toolbar shows/hides on scroll; the
+    // canvas rect genuinely changes with 46dvh, but reallocating the
+    // backing store mid-scroll is jank and can shift ink. Debounce and
+    // ignore sub-8px height-only wobbles.
+    this._resizeTimer = null;
+    this._lastRectW = 0;
+    this._lastRectH = 0;
+    window.addEventListener("resize", () => {
+      clearTimeout(this._resizeTimer);
+      this._resizeTimer = setTimeout(() => {
+        const r = this.canvas.getBoundingClientRect();
+        const dw = Math.abs(r.width - this._lastRectW);
+        const dh = Math.abs(r.height - this._lastRectH);
+        if (dw < 1 && dh < 8) return; // toolbar wobble, not a real resize
+        this._resize(true);
+      }, 150);
+    });
   }
 
   _resize(keep = false) {
@@ -21,6 +38,8 @@ export class InkCanvas {
     this.canvas.width = w;
     this.canvas.height = h;
     this.dpr = dpr;
+    this._lastRectW = rect.width;
+    this._lastRectH = rect.height;
     if (keep) this.redraw();
     else this._paintPaper();
   }
@@ -40,11 +59,21 @@ export class InkCanvas {
     c.style.touchAction = "none";
     c.addEventListener("pointerdown", (e) => {
       // One active pointer at a time: a second finger (palm) must not
-      // clobber the stroke in progress.
-      if (this.activeId !== null) return;
+      // clobber the stroke in progress — EXCEPT the Apple Pencil always
+      // wins: a resting palm that lands before the pencil is the common
+      // physical order on iPad, and the half-formed palm touch is junk.
+      if (this.activeId !== null) {
+        if (e.pointerType === "pen" && this.activeType !== "pen") {
+          this.current = null; // abandon the palm's partial stroke
+          this.activeId = null;
+        } else {
+          return;
+        }
+      }
       e.preventDefault();
       try { c.setPointerCapture(e.pointerId); } catch {}
       this.activeId = e.pointerId;
+      this.activeType = e.pointerType || "unknown";
       this.current = { points: [] };
       this._addPoint(e);
     });
@@ -64,6 +93,7 @@ export class InkCanvas {
       if (this.current.points.length >= 1) this.strokes.push(this.current);
       this.current = null;
       this.activeId = null;
+      this.activeType = null;
       this.redraw();
       if (this.onChange) this.onChange();
     };
@@ -156,7 +186,7 @@ export class InkCanvas {
   }
 
   undo() { this.strokes.pop(); this.redraw(); if (this.onChange) this.onChange(); }
-  clear() { this.strokes = []; this.current = null; this.activeId = null; this.redraw(); if (this.onChange) this.onChange(); }
+  clear() { this.strokes = []; this.current = null; this.activeId = null; this.activeType = null; this.redraw(); if (this.onChange) this.onChange(); }
   isEmpty() { return this.strokes.length === 0; }
 
   inkBBox() {

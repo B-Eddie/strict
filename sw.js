@@ -9,7 +9,7 @@
 // on iOS Safari with "no available backend found". Rewrapping a cached or
 // network response with the headers at serve time applies them to document
 // loads as well, so the page becomes crossOriginIsolated.
-const SHELL_CACHE = "strict-shell-v4";
+const SHELL_CACHE = "strict-shell-v6";
 // NOTE: model cache name must match MODEL_CACHE in js/app.js, or the
 // service worker's activate cleanup will delete the app-managed models.
 const MODEL_CACHE = "strict-models-v1";
@@ -32,8 +32,8 @@ const SHELL = [
   "./js/history.js",
   "./js/report.js",
   "./vendor/strict-vendor.js",
-  "./vendor/wasm/ort-wasm-simd-threaded.mjs",
-  "./vendor/wasm/ort-wasm-simd-threaded.wasm",
+  // Only the jsep pair is ever loaded (see WASM_PATHS in js/app.js); the
+  // classic ort-wasm-simd-threaded.* files are dead weight — do NOT precache.
   "./vendor/wasm/ort-wasm-simd-threaded.jsep.mjs",
   "./vendor/wasm/ort-wasm-simd-threaded.jsep.wasm",
   "./icons/icon-192.png",
@@ -57,9 +57,25 @@ function withCoiHeaders(res) {
 }
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(
-    caches.open(SHELL_CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())
-  );
+  e.waitUntil((async () => {
+    const c = await caches.open(SHELL_CACHE);
+    // addAll is all-or-nothing: one flaky 40MB wasm on a bad connection
+    // would fail the whole install, leaving no worker, no COOP/COEP, and a
+    // dead app. Cache per-asset instead; only fail if a CORE file (needed
+    // to render anything at all) didn't make it — the fetch handler falls
+    // back to network for the rest.
+    const CORE = new Set(["./", "./index.html", "./styles.css", "./js/app.js", "./vendor/strict-vendor.js"]);
+    const results = await Promise.allSettled(SHELL.map((u) => c.add(u)));
+    const failedCore = [];
+    results.forEach((r, i) => {
+      if (r.status === "rejected") {
+        console.warn("[strict sw] precache failed:", SHELL[i], r.reason);
+        if (CORE.has(SHELL[i])) failedCore.push(SHELL[i]);
+      }
+    });
+    if (failedCore.length) throw new Error("core precache failed: " + failedCore.join(", "));
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener("activate", (e) => {
