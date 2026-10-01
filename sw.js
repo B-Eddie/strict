@@ -2,29 +2,33 @@
 // SHELL: app code, precached on install (version-pinned).
 // MODELS: PaddleOCR.js model tars, version-pinned cache populated by the app's
 // first-run download UI (real progress) and served cache-first afterwards.
-const SHELL_CACHE = "strict-shell-v1";
-const MODEL_CACHE = "strict-models-v1";
+const SHELL_CACHE = "strict-shell-v2";
+const MODEL_CACHE = "strict-models-v2";
+
+// Base path of the app ("/" locally, "/strict/" on GitHub Pages).
+const BASE = new URL("./", self.location).pathname;
+const MODELS_PREFIX = new URL("./models/", self.location).pathname;
 
 const SHELL = [
-  "/",
-  "/index.html",
-  "/styles.css",
-  "/manifest.webmanifest",
-  "/js/app.js",
-  "/js/prompts.js",
-  "/js/canvas.js",
-  "/js/recognizer.js",
-  "/js/judge.js",
-  "/js/roast.js",
-  "/js/history.js",
-  "/js/report.js",
-  "/vendor/strict-vendor.js",
-  "/vendor/wasm/ort-wasm-simd-threaded.mjs",
-  "/vendor/wasm/ort-wasm-simd-threaded.wasm",
-  "/vendor/wasm/ort-wasm-simd-threaded.jsep.mjs",
-  "/vendor/wasm/ort-wasm-simd-threaded.jsep.wasm",
-  "/icons/icon-192.png",
-  "/icons/icon-512.png",
+  "./",
+  "./index.html",
+  "./styles.css",
+  "./manifest.webmanifest",
+  "./js/app.js",
+  "./js/prompts.js",
+  "./js/canvas.js",
+  "./js/recognizer.js",
+  "./js/judge.js",
+  "./js/roast.js",
+  "./js/history.js",
+  "./js/report.js",
+  "./vendor/strict-vendor.js",
+  "./vendor/wasm/ort-wasm-simd-threaded.mjs",
+  "./vendor/wasm/ort-wasm-simd-threaded.wasm",
+  "./vendor/wasm/ort-wasm-simd-threaded.jsep.mjs",
+  "./vendor/wasm/ort-wasm-simd-threaded.jsep.wasm",
+  "./icons/icon-192.png",
+  "./icons/icon-512.png",
 ];
 
 self.addEventListener("install", (e) => {
@@ -51,7 +55,7 @@ self.addEventListener("fetch", (e) => {
 
   // Models: cache-first (populated by first-run UI). If evicted/missing and
   // offline, this fails and the app falls back to the download UI.
-  if (url.pathname.startsWith("/models/")) {
+  if (url.pathname.startsWith(MODELS_PREFIX)) {
     e.respondWith(
       caches.open(MODEL_CACHE).then((c) =>
         c.match(e.request).then((hit) => hit || fetch(e.request))

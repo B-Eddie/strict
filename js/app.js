@@ -9,9 +9,9 @@ import { loadHistory, saveResult, streak, bestScore } from "./history.js";
 import { renderReportCard, shareReportCard } from "./report.js";
 
 const MODEL_CACHE = "strict-models-v1";
-const DET_URL = "/models/PP-OCRv5_mobile_det.tar";
-const REC_URL = "/models/PP-OCRv5_mobile_rec.tar";
-const WASM_PATHS = "/vendor/wasm/";
+const DET_URL = "./models/PP-OCRv5_mobile_det.tar";
+const REC_URL = "./models/PP-OCRv5_mobile_rec.tar";
+const WASM_PATHS = "./vendor/wasm/";
 
 const $ = (id) => document.getElementById(id);
 const screens = ["loading", "practice", "result", "history"];
@@ -44,7 +44,7 @@ async function boot() {
       try { await navigator.storage.persist(); } catch {}
     }
     if ("serviceWorker" in navigator) {
-      try { await navigator.serviceWorker.register("/sw.js"); } catch (e) { console.warn("sw failed", e); }
+      try { await navigator.serviceWorker.register("./sw.js"); } catch (e) { console.warn("sw failed", e); }
     }
     setLoadStatus("Checking the judge's library…");
     const need = await missingModels();
